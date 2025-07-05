@@ -366,15 +366,15 @@ async def start_race(sid, data=None):
                 await sio.emit('error', {'message': 'Need exactly 2 players for a 1v1 race'}, to=sid)
                 return
             
-            # Check if player is ready (if not host)
-            if room['host_sid'] != sid and not room['players'][sid].get('ready', False):
+            # Check if player is ready (all players must be ready)
+            if not room['players'][sid].get('ready', False):
                 await sio.emit('error', {'message': 'You must be ready to start the race'}, to=sid)
                 return
             
-            # Check if all other players are ready
+            # Check if all players are ready
             all_ready = True
             for player_sid, player_data in room['players'].items():
-                if player_sid != sid and not player_data.get('ready', False):
+                if not player_data.get('ready', False):
                     all_ready = False
                     break
             
