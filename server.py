@@ -289,6 +289,15 @@ async def select_car(sid, data):
                 'index': car_index
             }
             
+            # Also store car_name directly for easier access
+            rooms[room_id]['players'][sid]['car_name'] = car_name
+            
+            # Mark car as selected
+            rooms[room_id]['players'][sid]['car_selected'] = True
+            
+            # Log car selection
+            print(f"Player {players[sid]['name']} selected car: {car_name} (index: {car_index})")
+            
             # Update room's last activity time
             rooms[room_id]['last_activity'] = time.time()
             
@@ -315,13 +324,12 @@ async def player_ready(sid, data):
             # Update room's last activity time
             rooms[room_id]['last_activity'] = time.time()
             
-            # Notify other players about ready status
+            # Notify all players about ready status, including the player who changed status
             for player_sid in rooms[room_id]['players']:
-                if player_sid != sid:
-                    await sio.emit('player_ready_changed', {
-                        'player_id': sid,
-                        'ready': ready_status
-                    }, to=player_sid)
+                await sio.emit('player_ready_changed', {
+                    'player_id': sid,
+                    'ready': ready_status
+                }, to=player_sid)
 
 @sio.event
 async def chat_message(sid, data):
@@ -345,11 +353,11 @@ async def chat_message(sid, data):
 
 @sio.event
 async def start_race(sid, data=None):
-    """Start the race (only for room host)"""
+    """Start the race (any player can start if conditions are met)"""
     if sid in players and players[sid]['room_id']:
         room_id = players[sid]['room_id']
         
-        if room_id in rooms and rooms[room_id]['host_sid'] == sid:
+        if room_id in rooms:
             room = rooms[room_id]
             
             # Check if we have exactly 2 players for 1v1
@@ -357,16 +365,26 @@ async def start_race(sid, data=None):
                 await sio.emit('error', {'message': 'Need exactly 2 players for a 1v1 race'}, to=sid)
                 return
             
-            # Check if all non-host players are ready
+            # Check if player is ready (all players must be ready)
+            if not room['players'][sid].get('ready', False):
+                await sio.emit('error', {'message': 'You must be ready to start the race'}, to=sid)
+                return
+            
+            # Check if all players are ready
             all_ready = True
             for player_sid, player_data in room['players'].items():
-                if player_sid != sid and not player_data.get('ready', False):
+                if not player_data.get('ready', False):
                     all_ready = False
                     break
             
             if not all_ready:
                 await sio.emit('error', {'message': 'All players must be ready to start the race'}, to=sid)
                 return
+                
+            # Log who is starting the race
+            print(f"Race being started by {players[sid]['name']} (sid: {sid})")
+            print(f"Is host: {room['host_sid'] == sid}")
+            print(f"Room players: {room['players']}")
             
             # Check if all players have selected a car
             # This check is now optional, as cars are automatically selected from profile
@@ -385,9 +403,24 @@ async def start_race(sid, data=None):
             
             # Notify all players that race is starting
             for player_sid in room['players']:
+                # Include more data in race_starting event
                 await sio.emit('race_starting', {
-                    'map': room['map']
+                    'map': room['map'],
+                    'starter_sid': sid,
+                    'starter_name': players[sid]['name'],
+                    'players': {
+                        p_sid: {
+                            'name': p_data['name'],
+                            'ready': p_data.get('ready', False),
+                            'car_name': p_data.get('car_name', None),
+                            'is_host': p_sid == room['host_sid']
+                        }
+                        for p_sid, p_data in room['players'].items()
+                    }
                 }, to=player_sid)
+                
+                # Log the event
+                print(f"Sent race_starting event to {room['players'][player_sid]['name']}")
             
             # Start countdown after a short delay
             await asyncio.sleep(1)
@@ -409,15 +442,24 @@ async def start_race(sid, data=None):
             for player_sid, player_data in room['players'].items():
                 players_data[player_sid] = {
                     'player_name': player_data['name'],
-                    'car_data': player_data.get('car_data', {})
+                    'car_data': player_data.get('car_data', {}),
+                    'car_name': player_data.get('car_name'),
+                    'ready': player_data.get('ready', False),
+                    'is_host': player_sid == room['host_sid']
                 }
             
             # Send race start event to all players
             for player_sid in room['players']:
                 await sio.emit('race_start', {
                     'player_id': player_sid,
-                    'players': players_data
+                    'players': players_data,
+                    'starter_sid': sid,
+                    'starter_name': players[sid]['name'],
+                    'timestamp': time.time()
                 }, to=player_sid)
+                
+                # Log the event
+                print(f"Sent race_start event to {room['players'][player_sid]['name']}")
 
 @sio.event
 async def player_update(sid, data):
